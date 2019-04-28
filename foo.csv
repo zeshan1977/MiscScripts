@@ -1,0 +1,6 @@
+https://finance.yahoo.com/quote/AMZN/options?p=AMZN&date=1539907200&straddle=false
+Underlying Price= 1883.42
+CallsforOctober 19, 2018
+											
+Time,of,day,,Contract,Name,,Last,Trade,Date,,Strike,Last,Price,Bid,Ask,Change,%Change,Volume,OpenInterest,ImpliedVolatility,moneyness(ITM_OTM_ATM),Underlying,price,Date
+1130,AMZN181019C00740000,2018-08-13,11:32AM EDT, 740, 1168.65,1142.95,1147.95.0 - 14 43 115.14% ITM 

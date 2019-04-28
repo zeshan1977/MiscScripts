@@ -1,0 +1,545 @@
+
+python4econ
+
+Python for Economists
+February 5, 2013
+Building a Stock Options Historical Database
+I am interested in doing econometric analysis on financial derivatives. The main hangup I have faced is that there are no good free resources (at least that I know of) for historical options data. For that reason I want to create my own personal database of historical options prices. I have broken this project down into three main hurdles:
+
+    Figure out how to get options data from within python
+    Pick a data storage format
+    Automate the collection of daily data
+
+Getting options data in python
+
+Over the summer I had some free time and teamed up with my dad to create an investment model. While it is a very simple model, this post is about building a database so I won't go into details here. It suffices to say that I needed to find a way to get options data from yahoo! Finance. This was a unique challenge because unlike equity data or data from other sources like FRED, options data doesn't have a convenient "download to csv" button anywhere on the website. 
+
+At the time I was reading the excellent book "Python for Data Analysis" by Wes McKinney and got an idea for how to implement a basic web crawler to parse the html on yahoo and return the data in a python friendly format. Long story short, I wrote some code to do just that and it made its way into version 0.9 of the pandas library (if you aren't familiar with pandas and you work with data in python you should definitely check it out).
+
+Now only these few commands are needed to get options data from yahoo Finance!:
+
+from pandas.io.data import Options
+
+aapl = Options('AAPL')
+puts, calls = appl.get_options_data()
+
+The calls and puts objects are pandas DataFrames that contain the same information you would find on the yahoo! Finance page for Apple Inc. options.
+
+Picking the file format
+
+In picking a file format I had two main considerations: size of the file and speed at which it can be written/read. To test this out I wrote a simple script that generated a random 4000 by 4000 numpy array and defined functions for writing and reading that data in different file formats. The formats I chose to work with were csv, hdf5 (.h5), and MatLab (.mat). Below is the script I used to run the test:
+
+import numpy as np
+from scipy.io import savemat, loadmat
+import pandas as pd
+import h5py
+
+data = np.random.randn(4000, 4000)
+
+file_path = '/Users/spencerlyon2/Desktop/test_data.'
+
+
+def store_csv():
+    pd_data = pd.DataFrame(data)
+    pd_data.to_csv(file_path + 'csv')
+
+
+def store_h5():
+    f = h5py.File(file_path + 'h5')
+    dset = f.create_dataset('data', (4000, 4000), 'f')
+    dset[...] = data
+    f.close()
+
+
+def store_mat():
+    sp_dat = {'data': data}
+    savemat(file_path + 'mat', sp_dat)
+
+
+def read_csv():
+    pd_data_in = pd.DataFrame().from_csv(file_path + 'csv')
+    return pd_data_in
+
+
+def read_h5():
+    f_in = h5py.File(file_path + 'h5', 'r')
+    d_in = f_in['data']
+    f_in.close()
+    return d_in
+
+
+def read_mat():
+    mat_dict = loadmat(file_path + 'mat')
+    return mat_dict['data']
+
+After I had this code I simply fired up iPython and ran the file (file_test.py) and used the %timeit magic to see how long it took each of the three methods to read and write the data. The timing results, along with the final file sizes are summarized in the table below:
+
+	csv 	hdf5 	mat
+Write time 	59.9 s 	101 ms 	836 ms
+Read Time 	6.07 s 	409 us 	82.5 ms
+File size 	322.6 MB 	64 MB 	128 MB
+
+It is easy to see that the hdf5 file type is the best one to choose for my purposes. I would like to note here that the reason the hdf5 file format is 1/2 the size of the .mat file, is because the dtype in the .h5 file is a 32 bit float whereas the .mat dtype is a 64 bit float. However, for stock options we only generally have/care about data out two decimal places so the 32 bit precision is plenty. 
+
+Automating the data retrieval
+
+The final step in getting this database started was to automate the data retrieval process. To do this I used the popular UNIX scheduling tool cron. I run OSX 10.8 Mountain Lion, and by default in 10.8 the cron tool is disabled. To fix this I simply ran the following command in the terminal:
+
+sudo touch /etc/crontab
+
+This command creates the /etc/crontab file (if it doesn't already exist) and gets it ready for use by cron. I am not going to give a detailed explanation for how to use cron here (as I am still fairly new at it myself), but googling for it will give you lots of examples and tutorials. I will, however give the line in my crontab file that executes the script:
+
+50 23 * * 1,2,3,4,5 python ~/Documents/Python/pytools/Finance/db_cron.py
+
+The next step was to write the script I would have cron call. This appears below.
+
+"""
+db_cron.py
+
+Created Feb 6, 2013
+
+Author: Spencer Lyon
+
+File to be run automatically by cron each day to gather options data
+"""
+import datetime as dt
+import pandas as pd
+import numpy as np
+from options import Options
+import h5py as h5
+
+# ticker_list.csv contains all tickers on nyse and nasdaq stock exchanges
+tickers = pd.Series.from_csv('ticker_list.csv')
+num_ticks = tickers.size  # used to print status
+
+months = {1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'May', 6: 'Jun',
+          7: 'Jul', 8: 'Aug', 9: 'Se[', 10: 'Oct', 11: 'Nov', 12: 'Dec'}
+
+now = dt.datetime.now()  # Get current time
+c_month = months[now.month]  # Get current month
+c_day = str(now.day)  # Get current day
+c_year = str(now.year)  # Get current year
+
+f = h5.File('/Volumes/Secondary HD/options_db.h5')  # open database file
+year = f.require_group(c_year)  # Make hdf5 group for year
+month = year.require_group(c_month)  # Make hdf5 group for month
+day = month.require_group(c_day)  # Make hdf5 group for day
+
+num = 0
+for i in tickers:
+    option = Options(i)
+
+    # NOTE: this functionality is forthcoming in pandas 0.11
+    raw_calls = option.get_forward_data(months=3, call=1, put=0,
+                                        near=1, above_below=6)
+    raw_puts = option.get_forward_data(months=3, call=0, put=1,
+                                        near=1, above_below=6)
+
+    if raw_calls.values.any():  # Check if any calls were returned
+        try:  # Try to add item to file.
+            # This block (and below for puts) does the following:
+            #   - Get unique expiry dates
+            #   - make hdf5 group for ticker
+            #   - Get options data for each expiry
+            #   - Put each set of expiry data in unique hdf5 dataset
+
+            expiries = raw_calls.Expiry.unique().astype(str)
+            tick = day.require_group(i)
+
+            for ex in expiries:
+                data = raw_calls[raw_calls.Expiry == ex]
+                i_calls = data[['Strike', 'Last', 'Vol']]
+                i_calls.Vol = i_calls.Vol.str.replace(',', '')
+
+                ex_m_y = ex[:2] + ex[-3:]
+                call_ds = tick.require_dataset('C' + i + ex_m_y,
+                                               i_calls.shape, float)
+                call_ds[...] = i_calls.astype(np.float32)
+        except:  # If it doesn't work just pass
+            pass
+
+    if raw_puts.values.any():  # Check if any puts were returned
+        try:
+            expiries = raw_puts.Expiry.unique().astype(str)
+            tick = day.require_group(i)
+
+            for ex in expiries:
+                data = raw_puts[raw_puts.Expiry == ex]
+                i_puts = data[['Strike', 'Last', 'Vol']]
+                i_puts.Vol = i_puts.Vol.str.replace(',', '')
+                ex_m_y = ex[:2] + ex[-3:]
+                put_ds = tick.require_dataset('P' + i + ex_m_y,
+                                              i_puts.shape, float)
+                put_ds[...] = i_puts.astype(np.float32)
+        except:
+            pass
+
+    # status update
+    num += 1
+    if num % 500 == 0:
+        print "just finished %s of %s" % (str(num), str(num_ticks))
+
+f.close()  # Close file
+
+I have cron run this script at a specified time each week-day and populate the hdf5 file. The resultant file will have a nested structure like this:
+
+/Year {
+    / Month{
+        /Day {
+            /Ticker {
+                CTICKmm-yy
+                PTICKmm-yy
+            }
+        }
+    }
+}
+
+The notation CTICKmm-yy stands for a call option (C), a given ticker (TICK), and the expiry of the option (mm-yy). Inside each of the datasets there are three columns: strike price, last price on option contract, and volume in last trading day.
+
+After running this script for one night, the resultant hdf5 data file was 7.648648 MB. If I were to allow this file to run each business day for a year, the final file size would be under 2 GB. Not bad!
+
+If you would like more information on how I collect ticker names or what Options functionality is in pandas 0.10 or earlier leave a comment and I'll do my best to respond.
+Posted by Spencer Lyon at 11:16 PM Email ThisBlogThis!Share to TwitterShare to FacebookShare to Pinterest
+Labels: cron, hdf5, pandas stock options, python finance, Python stock options database
+25 comments:
+
+    JamesJune 10, 2013 at 6:50 PM
+
+    Awesome! I have been wanting to do something like this, since I too want to backtest some of my strategies.
+
+    You should probably change 'from options import Options' to 'from pandas.io.data import Options', but other than that your script works great.
+
+    Would you be willing to share the option data you've collected so far? I could reciprocate the favour by acting as a backup for running the script in case you ever lose connectivity for a few days.
+
+    I was considering roughly testing using prices generated using BlackScholes, but real data is obviously better.
+
+    Reply
+    Replies
+        Spencer LyonJune 10, 2013 at 7:43 PM
+
+        James,
+
+        Glad you like the script. I actually have stopped running the file each night so I don't have too much data. Otherwise I'd be happy to share it with you.
+
+        With respect to the import statements. I am the author of the Options class in pandas. At the time of writing this blog post some of the functionality I use in the script hadn't been merged into a released version of pandas, so I called my local version (in a file named options) upon which I based the pandas version
+
+        FYI: There are actually some API changes happening with the Options class within pandas right now. If the changes happen the way one of the other contributors has suggested, much of the code in this script may be obsolete. At the very least it should still get people started!
+        JamesJune 11, 2013 at 7:05 PM
+
+        Thanks.
+
+        I figured that was the case with the import statements.
+
+        Can you point me at the discussion? I will probably follow the discussion.
+        Reply
+    bijuOctober 31, 2013 at 4:42 AM
+
+    I am in the process of setting up a large derivatives database. The parsing from weblinks is all ready. Where I am a bit lost is how to create the database of all individual options in such a way which enables calculations like SKEW, etc without manually choosing the individual options every time to do the calculation. How to make such generic references...i am a bit lost here and wants to sort that out first before going ahead with the data creation.
+    Reply
+    Morten SørensenJanuary 27, 2014 at 4:48 AM
+
+    I believe the correct order in the return tuple is puts, calls = aapl.get_options_data().
+    Reply
+    Replies
+        Spencer LyonFebruary 26, 2014 at 12:23 PM
+
+        Hey Martin, you are right. When I initially added the options gathering code to pandas, I had `get_options_data` return calls first. Not sure when/why someone changed it.
+        Spencer LyonFebruary 26, 2014 at 12:30 PM
+
+        I updated the code in the post to use the correct puts, calls ordering now.
+        Reply
+    AnonymousFebruary 26, 2014 at 11:40 AM
+
+    I though this would be pretty useful being able to download options prices. To start with I was using the script you provided above (pretty much). I have pandas 0.13.1, but it seems completely broken. Errors occur with the following line:
+
+    raw_calls = option.get_forward_data(months=100, call=True, put=False, near=False, above_below=6).
+
+    Since I want to get all option data I think I have to use the get_forward_data method. The other methods appear to only support getting a particular month. The error is quite long but the last couple lines are:
+
+    File "/usr/local/lib/python2.7/dist-packages/pandas/io/parsers.py", line 1653, in _next_line
+    raise StopIteration
+    StopIteration
+
+    Does anyone know how to fix this? Also I am running Ubuntu Linux. I think version 0.11 of Pandas was working somewhat, though it would not get all the option prices. I am not sure how to use pip to downgrade at this point either so I am probably stuck trying to get version 0.13.1 working.
+
+    Thanks.
+    Reply
+    Replies
+        Spencer LyonFebruary 26, 2014 at 12:29 PM
+
+        Hey Anonymous (sorry don't know your name, or if it is Anonymous - that is awesome!)
+
+        Sorry that these functions aren't working properly. I wrote this code about a year ago and at the time this worked without any problems. Pandas is under heavy development and it seems that since the time I wrote this code, the api has gone trough some breaking changes.
+
+        Unfortunately, I don't have time right now to go through and change the code from this post so that it works with 0.13. I can say that all the functionality described in this post still exists with v0.13, but some of the method signatures may have changed.
+
+        I believe that the docstrings for each method of the Options class should be detailed enough to give you a pretty good idea about what needs to change. you can find them here: https://github.com/pydata/pandas/blob/master/pandas/io/data.py#L545-L905
+
+        If you are feeling up for it and do end up making the necessary changes, please let me know and I will update the code here to reflect them.
+
+        Thanks,
+
+        Spencer
+
+        P.S. if you give it a try and are having a hard time, post here again and I'll try to give some guidance.
+        Reply
+    GregFebruary 27, 2014 at 8:50 AM
+
+    I was able to make a few changes and it looks like things are working for me. Not sure how to get the updated code to you.
+    Reply
+    Replies
+        GregMarch 1, 2014 at 12:16 PM
+
+        Spencer I am Anonymous, well, not any more. Basically I think the problem was just with the get_forward_data, so perhaps their rational was that it is marked as deprecated and it was not maintained. However, I think the function is useful and should be kept.
+        Spencer LyonMarch 3, 2014 at 4:16 AM
+
+        Hey Greg, this is great. I am glad that you got the code to work again and thanks for letting me know.
+
+        Where did you have to make the changes? Was it to the code on the site, or to the code in pandas?
+
+        If it was to this code, let me know and I will ask you to send me an email with the code so I can update it here.
+        Reply
+    GregMarch 12, 2014 at 11:31 AM
+
+    Hi Spencer,
+
+    I have been busy with another project, but basically I just made a couple changes to get things running. For simplicity I just made the changes to data.py. I think the in_month and in_year indexes were calculated wrong. Also, in some cases frame returns None. frame returning None was causing the crash.
+
+    If someone has the time the code should be updated to just query for options data that actually exists in the time month range passed in. I am not sure how to parse this information from the HTML. Right now it will query Yahoo for each month of data even when there are no options available for that month/year for the get_forward_data method.
+
+    Here is the linux diff output for the changes I made:
+
+    diff pandas/io/data.py pandas.01/io/data.py
+    25d24
+    < DEBUG = True
+    538,541d536
+    <
+    < if(len(data)==0):
+    < return None
+    <
+    590,595c585
+    < try:
+    < self.symbol = symbol.upper()
+    < except:
+    < msg = "symbol must be a valid string"
+    < raise ValueError(msg)
+    <
+    ---
+    > self.symbol = symbol.upper()
+    860,866c850,861
+    <
+    < in_years = []
+    < for i,m in enumerate(in_months):
+    < years = (m-1)/12
+    < mon = m - years*12
+    < in_years.append(years+CUR_YEAR)
+    < in_months[i]=mon
+    ---
+    > in_years = [CUR_YEAR] * (months + 1)
+    >
+    > # Figure out how many items in in_months go past 12
+    > to_change = 0
+    > for i in range(months):
+    > if in_months[i] > 12:
+    > in_months[i] -= 12
+    > to_change += 1
+    >
+    > # Change the corresponding items in the in_years list.
+    > for i in range(1, to_change + 1):
+    > in_years[-i] += 1
+    875,878c870,873
+    < for i in range(months):
+    < m2 = in_months[i]
+    < y2 = in_years[i]
+    < if DEBUG: print "Getting %s: %s/%s" % (self.symbol,m2,y2)
+    ---
+    > for mon in range(months):
+    > m2 = in_months[mon]
+    > y2 = in_years[mon]
+    >
+    892,895d886
+    < if frame is None:
+    < if DEBUG: print '...no data'
+    < continue
+    <
+    Reply
+    AnonymousDecember 30, 2014 at 10:36 PM
+
+    Hi,
+    Thanks for your great work. It seems like it is currently broken - maybe a layout/schema change on yahoo (it's that table_loc = 13 in the call to _get_option_data() )?
+
+    Thanks,
+    Chris Amow
+
+    I'll debug it when I have time, here's the details so far:
+
+    Connected to pydev debugger (build 135.1057)
+    Traceback (most recent call last):
+    File "/usr/share/pycharm/helpers/pydev/pydevd.py", line 1733, in
+    debugger.run(setup['file'], None, None)
+    File "/usr/share/pycharm/helpers/pydev/pydevd.py", line 1226, in run
+    pydev_imports.execfile(file, globals, locals) # execute the script
+    File "/home/chris/develop/src/trading/options.py", line 5, in
+    puts, calls = aapl.get_options_data(expiry=date(2015, 1, 16))
+    File "/usr/lib/python2.7/dist-packages/pandas/io/data.py", line 630, in get_options_data
+    self.get_call_data)]
+    File "/usr/lib/python2.7/dist-packages/pandas/io/data.py", line 748, in get_put_data
+    return self._get_option_data(month, year, expiry, 13, 'puts')
+    File "/usr/lib/python2.7/dist-packages/pandas/io/data.py", line 673, in _get_option_data
+    " found".format(table_loc, ntables))
+    IndexError: Table location 13 invalid, 3 tables found
+
+    #calling code
+
+
+    from pandas.io.data import Options
+    from datetime import date
+
+    aapl = Options('AAPL', "yahoo")
+    puts, calls = aapl.get_options_data(expiry=date(2015, 1, 16))
+
+
+    In[3]: import pandas
+    In[4]: pandas.__version__
+    Out[4]: '0.13.1'
+
+    Reply
+    Spencer LyonDecember 31, 2014 at 9:22 AM
+
+    Hi, thanks for the comment. This code is now broken due to changes in the Yahoo Finance API. I think the pandas developers have the original code I gave them. See the relevant discussion here: https://github.com/pydata/pandas/pull/8631
+    Reply
+    AnonymousFebruary 22, 2015 at 6:25 PM
+
+    Hi Spencer apologies for the anonymous question but,
+    When you ran this program for every ticker in your list of NASDAQ and NYSE symbols, how long was the run time for an entire iteration?
+    Reply
+    Spencer LyonFebruary 23, 2015 at 7:49 AM
+
+    Anonymous -- no problem.
+
+    This routine takes quite a long time to run. Probably on the order of 6-8 hours.
+
+    It could be sped up quite a bit by making multiple requests at a time using the `threading` and `Queue` modules in the standard library. I have an example of doing this with regular equity data here: https://gist.github.com/spencerlyon2/8a90d9fdffd15e3ecddb
+    Reply
+    Replies
+        AnonymousFebruary 23, 2015 at 8:26 AM
+
+        Spencer -- I am very new to python and programming in general but find it powerful and fascinating with the little research/work I have done. So far I put together a very simple program to do something similar. This is what I have so far:
+        import datetime as dt
+        import pandas as pd
+        import numpy as np
+        from pandas.io.data import Options
+        from pandas import DataFrame
+        import h5py as h5
+
+        tickers = pd.pandas.io.parsers.read_csv(r'C:\Users\chris\Desktop\ticker_list2.csv')
+
+        num = 0
+        new_data=pd.DataFrame()
+        while num < tickers.size:
+        try:
+        i=tickers['Symbol'][num]
+        options = Options(i,"yahoo")
+        data = options.get_options_data()
+        new_data=new_data.append(data)
+        except:
+        pass
+        print num
+        num=num+1
+
+        new_data.to_csv(r'C:\Users\chris\Desktop\options_db2.hp5')
+
+        In my ticker list I have 6280 symbols or so, and I found that the get_options_data performs much quicker than the get_all_data method. Right now this runs in about 3 hours. My goal is to cut that by 1/6th.
+        It is still in the very basic stages but it does work and gathers the data for tickers that contain it. If you have any tips or suggestions to improve performance I'm all ears. I know a looping structure may not be the most efficient but everything for me is trial and error.
+
+        If this is trivial and/or a silly question I apologize, Again, I'm new and learning.
+        Spencer LyonFebruary 25, 2015 at 7:47 AM
+
+        I would imagine that the bottleneck (slowest part) of this program is retrieving the data from the web. Using the Queue and threading tools in the standard library like I did in the example I posted a link to is probably the best way to speed this part up.
+
+        Another relatively simple option to doing parallel data retrieval is be to write a function that obtains the data for a single list. Then you can use something like IPython parallel to map the function over the list of tickers in parallel. An example of using map in parallel can be found here: http://ipython.org/ipython-doc/2/parallel/parallel_demos.html
+
+        By the way, the single loop here is certainly not what takes this code a long time to run -- so don't worry about that.
+
+        Good luck!
+        Reply
+    Spencer LyonFebruary 23, 2015 at 7:50 AM
+
+    Though I should warn that I have not tested that particular code for a while so it may or may not work with current pandas.
+    Reply
+    AnonymousMarch 18, 2015 at 5:00 AM
+
+    I have been collecting option data since January. I am not sure how reliable the Yahoo data is but I have not found another free source to compare it to.
+
+    If you are using the data for trading purposes, you don't need to get data for all stocks, you can only effectively trade liquid options.
+
+    I use stocks that have Penny Increment Options. There are about 350 such stocks and they have the most actively traded options.
+
+    It takes between an hour and an hour and a half to get all the data from Yahoo. I create a csv file, size is around 10MB per day. Later I store all the data in an sqlite database. That makes it easier to analyze the data.
+
+    I use simple Python scripts, the only 3rd party module I use is BeautifulSoup. It is an html parsing tool that makes screen scraping data from webpages very easy. The more 3rd party tools you use, the mode likely you scripts will break frequently.
+    Reply
+    Replies
+        МаркетирOctober 10, 2015 at 8:25 AM
+
+        @AnonymousMarch 18, 2015 at 5:00 AM
+        Can you share your parsing scripts? I am pulling options data from barcharts, but it only offers about 1000 contracts of most liquid. I would prefer to collect more detail on select tickers.
+        Reply
+    МаркетирOctober 10, 2015 at 8:30 AM
+
+    @Spencer - Can't get past ticker.size ....
+
+    Do you know which version of pandas will work with options module?
+    Reply
+    Spencer LyonOctober 14, 2015 at 7:39 AM
+
+    Hi Маркетир,
+
+    I'm sorry, but I haven't visited this particular code in over 2 years. Pandas moves rather quickly, so it unsurprising that the code in this post doesn't work.
+
+    I don't currently have the time to debug the script, but I would suggest looking at the pandas documentation for the current option price scraping features. You can find it here http://pandas.pydata.org/pandas-docs/stable/remote_data.html#yahoo-finance-options.
+
+    For ticker lists. I was getting them from these two urls:
+
+    - http://www.nasdaq.com/screening/companies-by-name.aspx?\letter=0&exchange=nasdaq&render=download
+    - http://www.nasdaq.com/screening/companies-by-name.aspx?\letter=0&exchange=nyse&render=download
+
+    Good luck!
+    Reply
+    SteffSeptember 10, 2016 at 7:38 AM
+
+    I don't know so much about programming but I have got alot of yearly symbol files from http://intradata.co but I need to have for example year 2012-2015 in one and same file. Because I want to chart it out in my software like an extended chart? Is that possible to do with this script?
+    Reply
+
+Load more...
+
+Newer Post Older Post Home
+Subscribe to: Post Comments (Atom)
+Followers
+Popular Posts
+
+    Building a Stock Options Historical Database
+    Matlab's Cylinder Command in Python
+    Hodrick-Prescott Filter
+
+Blog Archive
+
+    ►  2014 (2)
+
+    ▼  2013 (5)
+        ►  October (1)
+        ►  May (1)
+        ►  March (1)
+        ▼  February (1)
+            Building a Stock Options Historical Database
+        ►  January (1)
+
+    ►  2012 (6)
+
+Contributors
+Ben Tengelsen (CMU - Tepper)
+Spencer Lyon (NYU - Stern)
+Chase Coleman (NYU - Stern)
+	
+Awesome Inc. template. Powered by Blogger.
+

@@ -1,0 +1,2 @@
+zesham2@ubuntu18:~/dev/pythonway/introtensorflow$ python generatedata.data.v1.py 260 {float,float,float,float} > data.csv
+# 260 rows, 4 columns of floats

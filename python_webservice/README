@@ -1,0 +1,17 @@
+ur trade resource will use HTTP methods as follows:
+HTTP Method	URI	                                 Action
+GET	http://[hostname]/todo/api/v1.0/trade	        |Retrieve list of trade
+GET	http://[hostname]/todo/api/v1.0/trade/[trade_id]|Retrieve a trade
+POST	http://[hostname]/todo/api/v1.0/trade	        |Create a new trade
+PUT	http://[hostname]/todo/api/v1.0/trade/[trade_id]|Update an existing trade
+DELETE	http://[hostname]/todo/api/v1.0/trade/[trade_id]|Delete a trade
+
+
+We can define a trade as having the following fields:
+
+    id: unique identifier for trade. Numeric type.
+    title: short trade description. String type.
+    description: long trade description. Text type.
+    done: trade completion state. Boolean type.
+
+
