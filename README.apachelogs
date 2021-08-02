@@ -1,9 +1,16 @@
 -------------------
+
+
+
+REM way2
 @echo off
-set /p args="Enter: -ip HPEiLO USER_ID :Example: -ip 48.88.87.88 hp >> "
+set /p args="Enter: -ip ilo_ip USER_ID :Example: -ip 19.88.87.88 hp >> "
 powershell -Command $pword = read-host "Enter password" -AsSecureString ; $BSTR=[System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($pword) ; [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR) > .tmp.txt & set /p password=<.tmp.txt & del .tmp.txt
 echo %password%
 echo %args%
+
+REM https://stackoverflow.com/questions/37554048/get-filename-from-openfiledialog-by-clicking-a-browse-button
+
 
 ---------------------------
 Apache access log (success - code 200):
